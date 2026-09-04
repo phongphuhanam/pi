@@ -1,0 +1,33 @@
+services:
+  pi:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.pi
+      args:
+        # apt-cacher-ng on the host, reached via the host-gateway alias
+        # added below. Leave unset (remove the line) to skip the cache.
+        APT_PROXY: http://host.docker.internal:3142
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+    image: pi-sandbox:ollama
+    container_name: pi-sandbox
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/workspace
+      - ./docker/pi-agent-home:/home/node/.pi/agent
+      # Host SSH keys/config for ssh, scp, rsync, and git-over-ssh to remote
+      # machines. Mounted read-write (not :ro) so ssh can append new host
+      # keys to known_hosts. Uid/gid 1000 in the container matches a
+      # typical host user, so no chown is needed.
+      - ~/.ssh:/home/node/.ssh
+      # Shared with the nginx instance at ~/Documents/webtop_setups (mounted
+      # there as /pi-sessions:ro, served at /pi-sessions/). Use `/export
+      # /pi-sessions/<name>.html` inside pi to publish a session snapshot.
+      - ~/Documents/webtop_setups/pi-sessions:/pi-sessions
+    # Default to the Ollama provider/model; override on the CLI, e.g.
+    # `docker compose -f docker-compose.pi.yml run --rm pi --model ollama/qwen3.6:27b`
+    command: ["--provider", "ollama", "--model", "qwen3.8:27b"]
