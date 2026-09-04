@@ -1,0 +1,55 @@
+services:
+  pi-web-sessiond:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.pi-web
+      args:
+        APT_PROXY: http://host.docker.internal:3142
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+    image: pi-web-sandbox:ollama
+    container_name: pi-web-sessiond
+    restart: unless-stopped
+    working_dir: /workspace
+    environment:
+      PI_WEB_DATA_DIR: /home/node/.pi-web
+    volumes:
+      - .:/workspace
+      # Same agent home the plain pi sandbox uses (docker-compose.pi.yml),
+      # so pi-web's sessions see the same Ollama provider config for free.
+      - ./docker/pi-agent-home:/home/node/.pi/agent
+      # Shared with pi-web-server below: the unix socket sessiond listens on
+      # lives here (PI_WEB_DATA_DIR/sessiond.sock). No network port needed
+      # between the two -- both containers just need this same path mounted.
+      - pi-web-data:/home/node/.pi-web
+      - ~/.ssh:/home/node/.ssh
+    command: ["pi-web-sessiond"]
+
+  pi-web-server:
+    image: pi-web-sandbox:ollama
+    container_name: pi-web-server
+    restart: unless-stopped
+    depends_on:
+      - pi-web-sessiond
+    # pi-web's web/API server has no built-in loopback-only restriction (it
+    # does not refuse --host 0.0.0.0 the way dsh does), but this deployment
+    # keeps the same posture as dsh anyway: loopback-only, reached through
+    # nginx. Host networking makes that loopback bind the same loopback
+    # nginx's own host-networked container already uses.
+    network_mode: host
+    environment:
+      PI_WEB_HOST: 127.0.0.1
+      PI_WEB_PORT: "8504"
+      PI_WEB_DATA_DIR: /home/node/.pi-web
+    volumes:
+      - pi-web-data:/home/node/.pi-web
+    # Wait for sessiond's socket before starting -- simpler than a Compose
+    # health-check dependency for a two-service, single-host pair.
+    command: >
+      bash -c '
+        until [ -S /home/node/.pi-web/sessiond.sock ]; do sleep 0.5; done
+        exec pi-web-server
+      '
+
+volumes:
+  pi-web-data:

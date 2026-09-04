@@ -1,0 +1,50 @@
+# Web UI for the Pi coding agent (jmfederico/pi-web: https://pi-web.dev/),
+# pointed at a remote Ollama instance instead of a hosted provider.
+FROM node:24-bookworm-slim
+
+# Slow layer first (see Dockerfile.pi for the caching rationale).
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+
+# Optional apt-get cache (e.g. apt-cacher-ng running on the Docker host at
+# port 3142). Pass --build-arg APT_PROXY=http://host.docker.internal:3142
+# to use it; omit to fetch packages directly.
+ARG APT_PROXY
+RUN if [ -n "$APT_PROXY" ]; then \
+      printf 'Acquire::http::Proxy "%s";\n' "$APT_PROXY" > /etc/apt/apt.conf.d/01proxy; \
+    fi
+
+# python3/make/g++ build node-pty's native module (pi-web's in-browser
+# terminal support); the rest matches the plain pi sandbox's tooling.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       bash ca-certificates git ripgrep curl \
+       openssh-client rsync rclone \
+       python3 make g++ \
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -f /etc/apt/apt.conf.d/01proxy
+
+# node-pty is the only install script pi-web's own dependency tree needs;
+# --allow-scripts scopes that consent instead of blanket-trusting every
+# package's install/postinstall hook.
+RUN npm install -g --allow-scripts=node-pty @jmfederico/pi-web
+
+# @earendil-works/pi-coding-agent's published "." entrypoint (dist/index.js)
+# re-exports main.js, which transitively imports dist/experimental/server.js
+# -- and that file requires @earendil-works/pi-server, a real dependency it
+# uses but never declares in its own package.json. Any SDK consumer (not
+# just pi-web) hits `Cannot find package '@earendil-works/pi-server'` on
+# import without this. Installing it directly into pi-web's own
+# node_modules is the working fix until upstream declares it themselves.
+RUN cd /usr/local/lib/node_modules/@jmfederico/pi-web && npm install @earendil-works/pi-server
+
+# Run as the non-root "node" user baked into this image (uid/gid 1000),
+# matching a typical host user so bind-mounted files don't need chowning.
+# /home/node/.pi-web pre-created here (not just at runtime) so the named
+# volume mounted over it in docker-compose.pi-web.yml initializes with
+# node:node ownership instead of the root-owned empty directory Docker
+# would otherwise create on first mount.
+RUN mkdir -p /workspace /home/node/.pi-web \
+  && chown node:node /workspace /home/node/.pi-web
+USER node
+
+WORKDIR /workspace
