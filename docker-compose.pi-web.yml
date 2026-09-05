@@ -31,14 +31,22 @@ services:
     restart: unless-stopped
     depends_on:
       - pi-web-sessiond
-    # pi-web's web/API server has no built-in loopback-only restriction (it
-    # does not refuse --host 0.0.0.0 the way dsh does), but this deployment
-    # keeps the same posture as dsh anyway: loopback-only, reached through
-    # nginx. Host networking makes that loopback bind the same loopback
-    # nginx's own host-networked container already uses.
-    network_mode: host
+    # Unlike dsh (which hard-refuses --host 0.0.0.0 and therefore needs
+    # network_mode: host + loopback to be reachable at all), pi-web has no
+    # such restriction, so it follows this repo's own established pattern
+    # instead (see docker-compose.vaultwarden.yml): a dedicated bridge
+    # network with a static IP, no host networking needed. nginx (running
+    # with network_mode: host) reaches this IP directly through the bridge
+    # interface Docker sets up on the host -- the same way it already
+    # reaches vaultwarden at 172.31.0.2. Binding 0.0.0.0 here only means
+    # "every interface inside this container's own network namespace";
+    # nothing publishes a host port, so it's still unreachable from
+    # anywhere but this bridge network (i.e. nginx).
+    networks:
+      pi-web-net:
+        ipv4_address: 172.24.0.2
     environment:
-      PI_WEB_HOST: 127.0.0.1
+      PI_WEB_HOST: 0.0.0.0
       PI_WEB_PORT: "8504"
       PI_WEB_DATA_DIR: /home/node/.pi-web
     volumes:
@@ -53,3 +61,9 @@ services:
 
 volumes:
   pi-web-data:
+
+networks:
+  pi-web-net:
+    ipam:
+      config:
+        - subnet: 172.24.0.0/24
